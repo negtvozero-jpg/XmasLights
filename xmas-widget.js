@@ -447,6 +447,17 @@ function processAlertQueue() {
 
 // -------- HOOKS DO STREAMELEMENTS --------
 
+function asBool(v, defaultVal = true) {
+  if (v === undefined || v === null) return defaultVal;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase().trim();
+    if (s === "true" || s === "on" || s === "1") return true;
+    if (s === "false" || s === "off" || s === "0") return false;
+  }
+  return !!v;
+}
+
 window.addEventListener("onWidgetLoad", (event) => {
   const canvas = document.getElementById("rive-canvas");
   if (!canvas) return;
@@ -455,23 +466,25 @@ window.addEventListener("onWidgetLoad", (event) => {
   LAST_FIELDS = fieldData;
   currentFieldData = fieldData;
 
-  ENABLE_FOLLOW = fieldData.enableFollow !== false;
-  ENABLE_SUB = fieldData.enableSub !== false;
-  ENABLE_SUB_T2 = fieldData.enableSubT2 !== false;
-  ENABLE_SUB_T3 = fieldData.enableSubT3 !== false;
-  ENABLE_GIFT_SMALL = fieldData.enableGiftSmall !== false;
-  ENABLE_GIFT_BIG = fieldData.enableGiftBig !== false;
-  ENABLE_DONATION = fieldData.enableDonation !== false;
-  ENABLE_BITS = fieldData.enableBits !== false;
-  ENABLE_RAID = fieldData.enableRaid !== false;
+  // ON/OFF usando helper
+  ENABLE_FOLLOW     = asBool(fieldData.enableFollow, true);
+  ENABLE_SUB        = asBool(fieldData.enableSub, true);
+  ENABLE_SUB_T2     = asBool(fieldData.enableSubT2, true);
+  ENABLE_SUB_T3     = asBool(fieldData.enableSubT3, true);
+  ENABLE_GIFT_SMALL = asBool(fieldData.enableGiftSmall, true);
+  ENABLE_GIFT_BIG   = asBool(fieldData.enableGiftBig, true);
+  ENABLE_DONATION   = asBool(fieldData.enableDonation, true);
+  ENABLE_BITS       = asBool(fieldData.enableBits, true);
+  ENABLE_RAID       = asBool(fieldData.enableRaid, true);
 
   MIN_DONATION = Number(fieldData.minDonation ?? 0) || 0;
-  MIN_BITS = Number(fieldData.minBits ?? 0) || 0;
-  MIN_RAID = Number(fieldData.minRaid ?? 0) || 0;
+  MIN_BITS     = Number(fieldData.minBits ?? 0) || 0;
+  MIN_RAID     = Number(fieldData.minRaid ?? 0) || 0;
   GIFT_BIG_THRESHOLD =
     Number(fieldData.giftBigThreshold ?? fieldData.giftThreshold ?? 10) || 10;
 
-  QUEUE_ENABLED = !!fieldData.enableAlertQueue;
+  // fila – vamos falar dela abaixo
+  QUEUE_ENABLED = asBool(fieldData.enableAlertQueue, false);
   QUEUE_MAX_SIZE = Number(fieldData.queueMaxSize ?? 20) || 20;
 
   alertQueue = [];
@@ -504,6 +517,7 @@ window.addEventListener("onWidgetLoad", (event) => {
     },
   });
 });
+
 
 window.addEventListener("resize", () => {
   if (riveInstance) {
