@@ -6,6 +6,47 @@ let riveInstance = null;
 window.XmasVM = null;
 let currentFieldData = {};
 
+// -------- FLAGS ON/OFF + MÍNIMOS + FILA --------
+let ENABLE_FOLLOW = true;
+let ENABLE_SUB = true;
+let ENABLE_SUB_T2 = true;
+let ENABLE_SUB_T3 = true;
+let ENABLE_GIFT_SMALL = true;
+let ENABLE_GIFT_BIG = true;
+let ENABLE_DONATION = true;
+let ENABLE_BITS = true;
+let ENABLE_RAID = true;
+
+let MIN_DONATION = 0;
+let MIN_BITS = 0;
+let MIN_RAID = 0;
+let GIFT_BIG_THRESHOLD = 10;
+
+let QUEUE_ENABLED = false;
+let QUEUE_MAX_SIZE = 20;
+
+let alertQueue = [];
+let isPlayingAlert = false;
+
+// prioridades por tipo de EventType (0–8)
+const EVENT_PRIORITY = {
+  0: 40,  // sub T1 / Prime
+  1: 50,  // sub T2
+  2: 60,  // sub T3
+  3: 45,  // small gift
+  4: 80,  // big gift
+  5: 50,  // donation
+  6: 40,  // bits
+  7: 100, // raid
+  8: 10,  // follower
+};
+
+function getEventPriority(eventType) {
+  return EVENT_PRIORITY[eventType] ?? 0;
+}
+
+// -------- FUNÇÕES RIVE / VM --------
+
 function hexToRiveColor(hex) {
   if (!hex || typeof hex !== "string") return null;
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -203,6 +244,8 @@ function applyFieldSettings(vmBundle, fieldData) {
   applyBulbStyles(vmBundle, fieldData);
 }
 
+// -------- GIFT COUNT ROBUSTO --------
+
 function resolveGiftCount(ev, defaultCount = 1) {
   const candidates = [
     ev.bulkGifted,
@@ -215,13 +258,11 @@ function resolveGiftCount(ev, defaultCount = 1) {
   for (const val of candidates) {
     if (val === undefined || val === null) continue;
 
-    // número direto
     if (typeof val === "number") {
       if (!Number.isNaN(val) && val > 0) return val;
       continue;
     }
 
-    // string só com dígitos ("10", "5", etc.)
     if (typeof val === "string") {
       const m = val.match(/^\d+$/);
       if (m) {
@@ -234,11 +275,16 @@ function resolveGiftCount(ev, defaultCount = 1) {
   return defaultCount;
 }
 
+// -------- CLASSIFICAÇÃO + FILTROS ON/OFF + MÍNIMOS --------
+
 function classifyEventType(listener, ev, fields) {
   let type = null;
 
   const bigGiftThreshold = Number(
-    fields.giftBigThreshold || fields.giftThreshold || 10
+    GIFT_BIG_THRESHOLD ||
+      fields.giftBigThreshold ||
+      fields.giftThreshold ||
+      10
   );
 
   switch (listener) {
@@ -247,7 +293,6 @@ function classifyEventType(listener, ev, fields) {
         .toLowerCase()
         .trim();
 
-      // DETECÇÃO DE GIFT
       const isGift =
         ev.gifted === true ||
         ev.isGift === true ||
@@ -259,18 +304,24 @@ function classifyEventType(listener, ev, fields) {
         ev.amount === "gift";
 
       if (isGift || ev.bulkGifted || ev.is_mass_gift) {
-        // usa função robusta pra achar quantos subs tem essa gift
         const giftCount = resolveGiftCount(ev, 1);
 
-        // big vs small
-        type = giftCount >= bigGiftThreshold ? 4 : 3;
+        if (giftCount >= bigGiftThreshold) {
+          if (!ENABLE_GIFT_BIG) return null;
+          type = 4; // big gift
+        } else {
+          if (!ENABLE_GIFT_SMALL) return null;
+          type = 3; // small gift
+        }
       } else {
-        // NÃO é gift → sub normal por tier
         if (tier.includes("2000") || tier === "tier2") {
+          if (!ENABLE_SUB_T2) return null;
           type = 1; // T2
         } else if (tier.includes("3000") || tier === "tier3") {
+          if (!ENABLE_SUB_T3) return null;
           type = 2; // T3
         } else {
+          if (!ENABLE_SUB) return null;
           type = 0; // T1 / Prime
         }
       }
@@ -279,19 +330,32 @@ function classifyEventType(listener, ev, fields) {
     }
 
     case "tip-latest":
-    case "donation-latest":
+    case "donation-latest": {
+      const amount = Number(ev.amount || ev.amount_raw || 0);
+      if (!ENABLE_DONATION) return null;
+      if (amount < MIN_DONATION) return null;
       type = 5;
       break;
+    }
 
-    case "cheer-latest":
+    case "cheer-latest": {
+      const bits = Number(ev.amount || ev.bits || 0);
+      if (!ENABLE_BITS) return null;
+      if (bits < MIN_BITS) return null;
       type = 6;
       break;
+    }
 
-    case "raid-latest":
+    case "raid-latest": {
+      const viewers = Number(ev.amount || ev.viewers || 0);
+      if (!ENABLE_RAID) return null;
+      if (viewers < MIN_RAID) return null;
       type = 7;
       break;
+    }
 
     case "follower-latest":
+      if (!ENABLE_FOLLOW) return null;
       type = 8;
       break;
 
@@ -302,6 +366,7 @@ function classifyEventType(listener, ev, fields) {
   return type;
 }
 
+// -------- DISPARO NO RIVE --------
 
 function fireRiveAlert(vmBundle, eventType) {
   if (!eventType && eventType !== 0) return;
@@ -333,6 +398,55 @@ function fireRiveAlert(vmBundle, eventType) {
   }
 }
 
+// -------- FILA OPCIONAL COM PRIORIDADE / DESCARTE --------
+
+function enqueueAlert(eventType) {
+  if (!QUEUE_ENABLED) {
+    const vmBundle = window.XmasVM;
+    fireRiveAlert(vmBundle, eventType);
+    return;
+  }
+
+  const priority = getEventPriority(eventType);
+  const alert = { eventType, priority };
+
+  if (alertQueue.length < QUEUE_MAX_SIZE) {
+    alertQueue.push(alert);
+    return;
+  }
+
+  let lowestIndex = 0;
+  let lowestPriority = alertQueue[0].priority;
+
+  for (let i = 1; i < alertQueue.length; i++) {
+    if (alertQueue[i].priority < lowestPriority) {
+      lowestPriority = alertQueue[i].priority;
+      lowestIndex = i;
+    }
+  }
+
+  if (priority <= lowestPriority) {
+    return;
+  }
+
+  alertQueue.splice(lowestIndex, 1);
+  alertQueue.push(alert);
+}
+
+function processAlertQueue() {
+  if (!QUEUE_ENABLED) return;
+  if (isPlayingAlert) return;
+  if (alertQueue.length === 0) return;
+
+  const next = alertQueue.shift();
+  isPlayingAlert = true;
+
+  fireRiveAlert(null, next.eventType);
+  // Agora o Rive avisa que terminou via Trigger "AlertDone"
+}
+
+// -------- HOOKS DO STREAMELEMENTS --------
+
 window.addEventListener("onWidgetLoad", (event) => {
   const canvas = document.getElementById("rive-canvas");
   if (!canvas) return;
@@ -340,6 +454,28 @@ window.addEventListener("onWidgetLoad", (event) => {
   const fieldData = (event && event.detail && event.detail.fieldData) || {};
   LAST_FIELDS = fieldData;
   currentFieldData = fieldData;
+
+  ENABLE_FOLLOW = fieldData.enableFollow !== false;
+  ENABLE_SUB = fieldData.enableSub !== false;
+  ENABLE_SUB_T2 = fieldData.enableSubT2 !== false;
+  ENABLE_SUB_T3 = fieldData.enableSubT3 !== false;
+  ENABLE_GIFT_SMALL = fieldData.enableGiftSmall !== false;
+  ENABLE_GIFT_BIG = fieldData.enableGiftBig !== false;
+  ENABLE_DONATION = fieldData.enableDonation !== false;
+  ENABLE_BITS = fieldData.enableBits !== false;
+  ENABLE_RAID = fieldData.enableRaid !== false;
+
+  MIN_DONATION = Number(fieldData.minDonation ?? 0) || 0;
+  MIN_BITS = Number(fieldData.minBits ?? 0) || 0;
+  MIN_RAID = Number(fieldData.minRaid ?? 0) || 0;
+  GIFT_BIG_THRESHOLD =
+    Number(fieldData.giftBigThreshold ?? fieldData.giftThreshold ?? 10) || 10;
+
+  QUEUE_ENABLED = !!fieldData.enableAlertQueue;
+  QUEUE_MAX_SIZE = Number(fieldData.queueMaxSize ?? 20) || 20;
+
+  alertQueue = [];
+  isPlayingAlert = false;
 
   if (!window.rive) return;
 
@@ -359,6 +495,12 @@ window.addEventListener("onWidgetLoad", (event) => {
       if (!vmBundle) return;
       applyFieldSettings(vmBundle, fieldData);
       riveInstance.play();
+    },
+    onEvent: (ev) => {
+      if (ev?.name === "AlertDone") {
+        isPlayingAlert = false;
+        processAlertQueue();
+      }
     },
   });
 });
@@ -380,6 +522,6 @@ window.addEventListener("onEventReceived", (e) => {
   const eventType = classifyEventType(listener, ev, fields);
   if (eventType == null) return;
 
-  const vmBundle = window.XmasVM;
-  fireRiveAlert(vmBundle, eventType);
+  enqueueAlert(eventType);
+  processAlertQueue();
 });
