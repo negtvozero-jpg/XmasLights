@@ -5,9 +5,6 @@ let LAST_FIELDS = {};
 let riveInstance = null;
 window.XmasVM = null;
 let currentFieldData = {};
-
-// -------------------- FLAGS / LIMITES / FILA --------------------
-
 let ENABLE_FOLLOW = true;
 let ENABLE_SUB = true;
 let ENABLE_SUB_T2 = true;
@@ -17,42 +14,30 @@ let ENABLE_GIFT_BIG = true;
 let ENABLE_DONATION = true;
 let ENABLE_BITS = true;
 let ENABLE_RAID = true;
-
 let MIN_DONATION = 0;
 let MIN_BITS = 0;
 let MIN_RAID = 0;
 let GIFT_BIG_THRESHOLD = 10;
-
-// fila de alertas (modo experimental)
 let QUEUE_ENABLED = true;
 let QUEUE_MAX_SIZE = 20;
 let alertQueue = [];
 let isPlayingAlert = false;
-
-// fallback caso o evento de fim não chegue
 const ALERT_FALLBACK_MS = 9000;
 let alertEndTimeoutId = null;
-
-// monitor de IsAlertOn (do Rive)
 let lastIsAlertOn = null;
-
-// controle de gift bomb (pra não repetir small/big gift)
 let lastGiftBombSignature = null;
 let lastGiftBombTime = 0;
-// janela de supressão de subs logo após gift bomb
 let lastGiftBombWindowUntil = 0;
-
-// prioridades (maior = mais importante)
 const EVENT_PRIORITY = {
-  0: 40,  // sub T1 / Prime
-  1: 50,  // sub T2
-  2: 60,  // sub T3
-  3: 45,  // gift pequeno
-  4: 80,  // gift grande
-  5: 50,  // donation
-  6: 40,  // bits
-  7: 100, // raid
-  8: 10,  // follower
+  0: 40,
+  1: 50,
+  2: 60,
+  3: 45,
+  4: 80,
+  5: 50,
+  6: 40,
+  7: 100,
+  8: 10,
 };
 
 function getEventPriority(eventType) {
@@ -73,8 +58,6 @@ function getEventLabel(eventType) {
     default: return `Type${eventType}`;
   }
 }
-
-// -------------------- UTILIDADES GERAIS --------------------
 
 function hexToRiveColor(hex) {
   if (!hex || typeof hex !== "string") return null;
@@ -118,8 +101,6 @@ function getFieldBool(fieldData, baseName, defaultVal = true) {
   }
   return defaultVal;
 }
-
-// -------------------- BIND DE VIEWMODEL --------------------
 
 function bindViewModels(instance) {
   const rootVM = instance.viewModelInstance;
@@ -319,8 +300,6 @@ function applyFieldSettings(vmBundle, fieldData) {
   applyBulbStyles(vmBundle, fieldData);
 }
 
-// -------------------- CLASSIFICAÇÃO / FILTROS --------------------
-
 function resolveGiftCount(ev, defaultCount = 1) {
   const candidates = [
     ev.giftCount,
@@ -364,7 +343,6 @@ function classifyEventType(listener, ev, fields) {
     case "subscriber-latest": {
       const now = Date.now();
 
-      // se estamos dentro da janela pós-giftbomb, descarta QUALQUER sub
       if (now < lastGiftBombWindowUntil) {
         console.log(
           "[XMAS] classifyEventType: SUB após gift bomb dentro da janela, descartado"
@@ -393,7 +371,6 @@ function classifyEventType(listener, ev, fields) {
         (ev.gifted === true || ev.isGift === true || ev.is_gift === true) &&
         !isBombSummary;
 
-      // ---------- GIFTED INDIVIDUAL (subs que NÃO queremos alertar) ----------
       if (isGiftedIndividual) {
         console.log(
           "[XMAS] classifyEventType: sub gifted individual descartado (sem alerta)",
@@ -402,7 +379,6 @@ function classifyEventType(listener, ev, fields) {
         return null;
       }
 
-      // ---------- MASS GIFT (small/big gift) ----------
       if (isBombSummary) {
         const signature = `${listener}|${giftBombKey || ""}|${rawGiftCount || 0}`;
 
@@ -425,14 +401,13 @@ function classifyEventType(listener, ev, fields) {
 
         if (giftCount >= bigGiftThreshold) {
           if (!ENABLE_GIFT_BIG) return null;
-          type = 4; // big gift
+          type = 4;
         } else {
           if (!ENABLE_GIFT_SMALL) return null;
-          type = 3; // small gift
+          type = 3; 
         }
 
-        // abre janela de supressão para subs logo depois do bomb
-        lastGiftBombWindowUntil = now + 8000; // 8s de bloqueio de subs
+        lastGiftBombWindowUntil = now + 8000;
 
         console.log(
           "[XMAS] classifyEventType: MASS GIFT",
@@ -443,16 +418,15 @@ function classifyEventType(listener, ev, fields) {
         break;
       }
 
-      // ---------- SUB NORMAL (T1/T2/T3) ----------
       if (tier.includes("2000") || tier === "tier2") {
         if (!ENABLE_SUB_T2) return null;
-        type = 1; // T2
+        type = 1;
       } else if (tier.includes("3000") || tier === "tier3") {
         if (!ENABLE_SUB_T3) return null;
-        type = 2; // T3
+        type = 2;
       } else {
         if (!ENABLE_SUB) return null;
-        type = 0; // T1 / Prime
+        type = 0;
       }
 
       console.log(
@@ -509,8 +483,6 @@ function classifyEventType(listener, ev, fields) {
   return type;
 }
 
-// -------------------- DISPARO NO RIVE --------------------
-
 function fireRiveAlert(vmBundle, eventType, label) {
   if (!eventType && eventType !== 0) return;
 
@@ -553,8 +525,6 @@ function fireRiveAlert(vmBundle, eventType, label) {
     triggerProp.trigger();
   }
 }
-
-// -------------------- FILA COM PRIORIDADE / DESCARTE --------------------
 
 function enqueueAlert(eventType, label) {
   if (!QUEUE_ENABLED) {
@@ -651,8 +621,6 @@ function processAlertQueue() {
   }, ALERT_FALLBACK_MS);
 }
 
-// -------------------- WATCH DO IsAlertOn --------------------
-
 function pollIsAlertOn() {
   const bundle = window.XmasVM;
   if (!bundle || !bundle.globalVM || !bundle.globalVM.boolean) return;
@@ -682,8 +650,6 @@ function pollIsAlertOn() {
     lastIsAlertOn = v;
   }
 }
-
-// -------------------- HOOKS DO WIDGET (LOAD / EVENTS) --------------------
 
 window.addEventListener("onWidgetLoad", (event) => {
   const canvas = document.getElementById("rive-canvas");
