@@ -6,7 +6,8 @@ let riveInstance = null;
 window.XmasVM = null;
 let currentFieldData = {};
 
-// -------- FLAGS ON/OFF + MÍNIMOS + FILA --------
+// -------------------- FLAGS / LIMITES / FILA --------------------
+
 let ENABLE_FOLLOW = true;
 let ENABLE_SUB = true;
 let ENABLE_SUB_T2 = true;
@@ -22,19 +23,32 @@ let MIN_BITS = 0;
 let MIN_RAID = 0;
 let GIFT_BIG_THRESHOLD = 10;
 
-let QUEUE_ENABLED = false;
+// fila de alertas (modo experimental)
+let QUEUE_ENABLED = true;
 let QUEUE_MAX_SIZE = 20;
-
 let alertQueue = [];
 let isPlayingAlert = false;
 
-// prioridades por tipo de EventType (0–8)
+// fallback caso o evento de fim não chegue
+const ALERT_FALLBACK_MS = 9000;
+let alertEndTimeoutId = null;
+
+// monitor de IsAlertOn (do Rive)
+let lastIsAlertOn = null;
+
+// controle de gift bomb (pra não repetir small/big gift)
+let lastGiftBombSignature = null;
+let lastGiftBombTime = 0;
+// janela de supressão de subs logo após gift bomb
+let lastGiftBombWindowUntil = 0;
+
+// prioridades (maior = mais importante)
 const EVENT_PRIORITY = {
   0: 40,  // sub T1 / Prime
   1: 50,  // sub T2
   2: 60,  // sub T3
-  3: 45,  // small gift
-  4: 80,  // big gift
+  3: 45,  // gift pequeno
+  4: 80,  // gift grande
   5: 50,  // donation
   6: 40,  // bits
   7: 100, // raid
@@ -45,7 +59,22 @@ function getEventPriority(eventType) {
   return EVENT_PRIORITY[eventType] ?? 0;
 }
 
-// -------- FUNÇÕES RIVE / VM --------
+function getEventLabel(eventType) {
+  switch (eventType) {
+    case 0: return "Sub";
+    case 1: return "SubT2";
+    case 2: return "SubT3";
+    case 3: return "SmallGift";
+    case 4: return "BigGift";
+    case 5: return "Donation";
+    case 6: return "Bits";
+    case 7: return "Raid";
+    case 8: return "Follower";
+    default: return `Type${eventType}`;
+  }
+}
+
+// -------------------- UTILIDADES GERAIS --------------------
 
 function hexToRiveColor(hex) {
   if (!hex || typeof hex !== "string") return null;
@@ -55,6 +84,42 @@ function hexToRiveColor(hex) {
   const argb = (0xff000000 | rgb) >>> 0;
   return argb;
 }
+
+function asBool(v, def = true) {
+  if (v === undefined || v === null) return def;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string") {
+    const s = v.toLowerCase().trim();
+    if (["true", "on", "1", "yes"].includes(s)) return true;
+    if (["false", "off", "0", "no"].includes(s)) return false;
+  }
+  return !!v;
+}
+
+function getFieldBool(fieldData, baseName, defaultVal = true) {
+  if (!fieldData) return defaultVal;
+
+  const candidates = [
+    fieldData[baseName],
+    fieldData[baseName && baseName.toLowerCase()],
+    baseName
+      ? fieldData[baseName.replace(/[A-Z]/g, (c) => c.toLowerCase())]
+      : undefined,
+    baseName
+      ? fieldData[baseName.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase())]
+      : undefined,
+    baseName
+      ? fieldData[baseName.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())]
+      : undefined,
+  ];
+
+  for (const v of candidates) {
+    if (v !== undefined) return asBool(v, defaultVal);
+  }
+  return defaultVal;
+}
+
+// -------------------- BIND DE VIEWMODEL --------------------
 
 function bindViewModels(instance) {
   const rootVM = instance.viewModelInstance;
@@ -96,6 +161,8 @@ function bindViewModels(instance) {
 
   const bundle = { rootVM, bulbInstancesVM, firstBulb, globalVM, bulbVMs };
   window.XmasVM = bundle;
+
+  console.log("[XMAS] bindViewModels -> bundle:", bundle);
   return bundle;
 }
 
@@ -165,7 +232,6 @@ function applyBulbStyles(vmBundle, fieldData) {
 
 function applyFieldSettings(vmBundle, fieldData) {
   if (!vmBundle || !vmBundle.globalVM) return;
-
   const globalVM = vmBundle.globalVM;
 
   const idleStyleMap = {
@@ -201,6 +267,7 @@ function applyFieldSettings(vmBundle, fieldData) {
 
     const prop = globalVM.number("IdleStyle");
     if (prop) prop.value = idx;
+    console.log("[XMAS] applyFieldSettings: IdleStyle idx =", idx);
   }
 
   if (globalVM.number && fieldData.idleSpeed) {
@@ -208,18 +275,21 @@ function applyFieldSettings(vmBundle, fieldData) {
     const sIdx = speedMap[fieldData.idleSpeed] ?? 1;
     const prop = globalVM.number("IdleSpeed");
     if (prop) prop.value = sIdx;
+    console.log("[XMAS] applyFieldSettings: IdleSpeed =", sIdx);
   }
 
   if (globalVM.number && typeof fieldData.bulbBrightness === "number") {
     const v = Math.max(0, Math.min(100, fieldData.bulbBrightness)) / 100;
     const prop = globalVM.number("BulbBrightness");
     if (prop) prop.value = v;
+    console.log("[XMAS] applyFieldSettings: BulbBrightness =", v);
   }
 
   if (globalVM.number && typeof fieldData.glowStrength === "number") {
     const v = Math.max(0, Math.min(100, fieldData.glowStrength)) / 100;
     const prop = globalVM.number("GlowStrength");
     if (prop) prop.value = v;
+    console.log("[XMAS] applyFieldSettings: GlowStrength =", v);
   }
 
   if (globalVM.color) {
@@ -227,32 +297,37 @@ function applyFieldSettings(vmBundle, fieldData) {
     const cSec = hexToRiveColor(fieldData.secondaryColor);
     const cAcc = hexToRiveColor(fieldData.accentColor);
 
+    const colorsDebug = {};
     if (cPrim != null) {
       const p = globalVM.color("ColorPrimary");
       if (p) p.value = cPrim;
+      colorsDebug.cPrim = cPrim;
     }
     if (cSec != null) {
       const p = globalVM.color("ColorSecondary");
       if (p) p.value = cSec;
+      colorsDebug.cSec = cSec;
     }
     if (cAcc != null) {
       const p = globalVM.color("ColorAccent");
       if (p) p.value = cAcc;
+      colorsDebug.cAcc = cAcc;
     }
+    console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
   }
 
   applyBulbStyles(vmBundle, fieldData);
 }
 
-// -------- GIFT COUNT ROBUSTO --------
+// -------------------- CLASSIFICAÇÃO / FILTROS --------------------
 
 function resolveGiftCount(ev, defaultCount = 1) {
   const candidates = [
+    ev.giftCount,
     ev.bulkGifted,
     ev.count,
     ev.quantity,
-    ev.giftCount,
-    ev.amount,
+    ev.giftCountAlt,
   ];
 
   for (const val of candidates) {
@@ -275,8 +350,6 @@ function resolveGiftCount(ev, defaultCount = 1) {
   return defaultCount;
 }
 
-// -------- CLASSIFICAÇÃO + FILTROS ON/OFF + MÍNIMOS --------
-
 function classifyEventType(listener, ev, fields) {
   let type = null;
 
@@ -289,22 +362,66 @@ function classifyEventType(listener, ev, fields) {
 
   switch (listener) {
     case "subscriber-latest": {
+      const now = Date.now();
+
+      // se estamos dentro da janela pós-giftbomb, descarta QUALQUER sub
+      if (now < lastGiftBombWindowUntil) {
+        console.log(
+          "[XMAS] classifyEventType: SUB após gift bomb dentro da janela, descartado"
+        );
+        return null;
+      }
+
       const tier = String(ev.tier || ev.tier_raw || ev.plan || "")
         .toLowerCase()
         .trim();
 
-      const isGift =
-        ev.gifted === true ||
-        ev.isGift === true ||
-        ev.is_gift === true ||
-        ev.isCommunityGift === true ||
-        ev.bulkGifted === true ||
-        ev.is_mass_gift === true ||
-        ev.gift === true ||
-        ev.amount === "gift";
+      const rawGiftCount = resolveGiftCount(ev, 0);
 
-      if (isGift || ev.bulkGifted || ev.is_mass_gift) {
-        const giftCount = resolveGiftCount(ev, 1);
+      const giftBombKey =
+        ev.giftBombKey || ev.giftnotify || ev.giftbombkey || null;
+
+      const isBombFlag =
+        ev.giftBomb === true ||
+        ev.isGiftBomb === true ||
+        ev.bulkGifted === true;
+
+      const isBombSummary =
+        isBombFlag || !!giftBombKey || rawGiftCount > 1;
+
+      const isGiftedIndividual =
+        (ev.gifted === true || ev.isGift === true || ev.is_gift === true) &&
+        !isBombSummary;
+
+      // ---------- GIFTED INDIVIDUAL (subs que NÃO queremos alertar) ----------
+      if (isGiftedIndividual) {
+        console.log(
+          "[XMAS] classifyEventType: sub gifted individual descartado (sem alerta)",
+          ev
+        );
+        return null;
+      }
+
+      // ---------- MASS GIFT (small/big gift) ----------
+      if (isBombSummary) {
+        const signature = `${listener}|${giftBombKey || ""}|${rawGiftCount || 0}`;
+
+        if (
+          signature &&
+          lastGiftBombSignature === signature &&
+          now - lastGiftBombTime < 3000
+        ) {
+          console.log(
+            "[XMAS] classifyEventType: gift bomb duplicado, ignorando",
+            { listener, ev }
+          );
+          return null;
+        }
+
+        lastGiftBombSignature = signature;
+        lastGiftBombTime = now;
+
+        const giftCount = rawGiftCount > 0 ? rawGiftCount : 1;
 
         if (giftCount >= bigGiftThreshold) {
           if (!ENABLE_GIFT_BIG) return null;
@@ -313,19 +430,37 @@ function classifyEventType(listener, ev, fields) {
           if (!ENABLE_GIFT_SMALL) return null;
           type = 3; // small gift
         }
-      } else {
-        if (tier.includes("2000") || tier === "tier2") {
-          if (!ENABLE_SUB_T2) return null;
-          type = 1; // T2
-        } else if (tier.includes("3000") || tier === "tier3") {
-          if (!ENABLE_SUB_T3) return null;
-          type = 2; // T3
-        } else {
-          if (!ENABLE_SUB) return null;
-          type = 0; // T1 / Prime
-        }
+
+        // abre janela de supressão para subs logo depois do bomb
+        lastGiftBombWindowUntil = now + 8000; // 8s de bloqueio de subs
+
+        console.log(
+          "[XMAS] classifyEventType: MASS GIFT",
+          giftCount,
+          "-> type",
+          type
+        );
+        break;
       }
 
+      // ---------- SUB NORMAL (T1/T2/T3) ----------
+      if (tier.includes("2000") || tier === "tier2") {
+        if (!ENABLE_SUB_T2) return null;
+        type = 1; // T2
+      } else if (tier.includes("3000") || tier === "tier3") {
+        if (!ENABLE_SUB_T3) return null;
+        type = 2; // T3
+      } else {
+        if (!ENABLE_SUB) return null;
+        type = 0; // T1 / Prime
+      }
+
+      console.log(
+        "[XMAS] classifyEventType: SUB normal, tier=",
+        tier || "T1/Prime",
+        "-> type",
+        type
+      );
       break;
     }
 
@@ -335,6 +470,7 @@ function classifyEventType(listener, ev, fields) {
       if (!ENABLE_DONATION) return null;
       if (amount < MIN_DONATION) return null;
       type = 5;
+      console.log("[XMAS] classifyEventType: DONATION amount=", amount);
       break;
     }
 
@@ -343,6 +479,7 @@ function classifyEventType(listener, ev, fields) {
       if (!ENABLE_BITS) return null;
       if (bits < MIN_BITS) return null;
       type = 6;
+      console.log("[XMAS] classifyEventType: BITS =", bits);
       break;
     }
 
@@ -351,31 +488,40 @@ function classifyEventType(listener, ev, fields) {
       if (!ENABLE_RAID) return null;
       if (viewers < MIN_RAID) return null;
       type = 7;
+      console.log("[XMAS] classifyEventType: RAID viewers=", viewers);
       break;
     }
 
     case "follower-latest":
       if (!ENABLE_FOLLOW) return null;
       type = 8;
+      console.log("[XMAS] classifyEventType: FOLLOWER");
       break;
 
     default:
-      break;
+      console.log(
+        "[XMAS] classifyEventType: listener não tratado, ignorando evento",
+        listener
+      );
+      return null;
   }
 
   return type;
 }
 
-// -------- DISPARO NO RIVE --------
+// -------------------- DISPARO NO RIVE --------------------
 
-function fireRiveAlert(vmBundle, eventType) {
+function fireRiveAlert(vmBundle, eventType, label) {
   if (!eventType && eventType !== 0) return;
 
   let bundle = vmBundle;
   if (!bundle && riveInstance) {
     bundle = bindViewModels(riveInstance);
   }
-  if (!bundle || !bundle.globalVM) return;
+  if (!bundle || !bundle.globalVM) {
+    console.warn("[XMAS] fireRiveAlert: sem globalVM");
+    return;
+  }
 
   const globalVM = bundle.globalVM;
 
@@ -389,29 +535,39 @@ function fireRiveAlert(vmBundle, eventType) {
       ? globalVM.trigger("EventTrigger")
       : null;
 
-  if (!typeProp || !triggerProp) return;
+  if (!typeProp || !triggerProp) {
+    console.warn(
+      "[XMAS] fireRiveAlert: inputs EventType/EventTrigger não encontrados"
+    );
+    return;
+  }
 
   typeProp.value = Number(eventType) || 0;
-
   if (typeof triggerProp.trigger === "function") {
+    console.log(
+      "[XMAS] fireRiveAlert: disparando eventType =",
+      eventType,
+      "label =",
+      label || getEventLabel(eventType)
+    );
     triggerProp.trigger();
   }
 }
 
-// -------- FILA OPCIONAL COM PRIORIDADE / DESCARTE --------
+// -------------------- FILA COM PRIORIDADE / DESCARTE --------------------
 
-function enqueueAlert(eventType) {
+function enqueueAlert(eventType, label) {
   if (!QUEUE_ENABLED) {
-    const vmBundle = window.XmasVM;
-    fireRiveAlert(vmBundle, eventType);
+    fireRiveAlert(null, eventType, label);
     return;
   }
 
   const priority = getEventPriority(eventType);
-  const alert = { eventType, priority };
+  const alert = { eventType, priority, label: label || getEventLabel(eventType) };
 
   if (alertQueue.length < QUEUE_MAX_SIZE) {
     alertQueue.push(alert);
+    console.log("[XMAS] enqueueAlert: ENFILEIRADO", alert);
     return;
   }
 
@@ -426,14 +582,45 @@ function enqueueAlert(eventType) {
   }
 
   if (priority <= lowestPriority) {
+    console.log(
+      "[XMAS] enqueueAlert: DESCARTADO novo alerta (prioridade menor ou igual)",
+      alert
+    );
     return;
   }
 
+  console.log(
+    "[XMAS] enqueueAlert: descartando alerta menos importante, index=",
+    lowestIndex,
+    "->",
+    alertQueue[lowestIndex]
+  );
   alertQueue.splice(lowestIndex, 1);
   alertQueue.push(alert);
 }
 
+function endCurrentAlert(reason) {
+  if (!isPlayingAlert) return;
+
+  if (alertEndTimeoutId) {
+    clearTimeout(alertEndTimeoutId);
+    alertEndTimeoutId = null;
+  }
+
+  console.log("[XMAS] endCurrentAlert: motivo =", reason, "queueLength:", alertQueue.length);
+
+  setTimeout(() => {
+    isPlayingAlert = false;
+    processAlertQueue();
+  }, 80);
+}
+
 function processAlertQueue() {
+  console.log("[XMAS] processAlertQueue: chamado", {
+    isPlayingAlert,
+    queueLength: alertQueue.length,
+  });
+
   if (!QUEUE_ENABLED) return;
   if (isPlayingAlert) return;
   if (alertQueue.length === 0) return;
@@ -441,41 +628,88 @@ function processAlertQueue() {
   const next = alertQueue.shift();
   isPlayingAlert = true;
 
-  fireRiveAlert(null, next.eventType);
-  // Agora o Rive avisa que terminou via Trigger "AlertDone"
-}
+  console.log("[XMAS] processAlertQueue: TOCANDO alerta", {
+    eventType: next.eventType,
+    label: next.label,
+    filaRestante: alertQueue.length,
+  });
 
-// -------- HOOKS DO STREAMELEMENTS --------
+  fireRiveAlert(null, next.eventType, next.label);
 
-function asBool(v, defaultVal = true) {
-  if (v === undefined || v === null) return defaultVal;
-  if (typeof v === "boolean") return v;
-  if (typeof v === "string") {
-    const s = v.toLowerCase().trim();
-    if (s === "true" || s === "on" || s === "1") return true;
-    if (s === "false" || s === "off" || s === "0") return false;
+  if (alertEndTimeoutId) {
+    clearTimeout(alertEndTimeoutId);
+    alertEndTimeoutId = null;
   }
-  return !!v;
+
+  alertEndTimeoutId = setTimeout(() => {
+    console.warn(
+      "[XMAS] ALERT_FALLBACK: timeout, IsAlertOn não voltou pra false (último =",
+      lastIsAlertOn,
+      ")"
+    );
+    endCurrentAlert("fallback_timeout");
+  }, ALERT_FALLBACK_MS);
 }
+
+// -------------------- WATCH DO IsAlertOn --------------------
+
+function pollIsAlertOn() {
+  const bundle = window.XmasVM;
+  if (!bundle || !bundle.globalVM || !bundle.globalVM.boolean) return;
+
+  const prop = bundle.globalVM.boolean("IsAlertOn");
+  if (!prop) return;
+
+  const v = !!prop.value;
+  if (lastIsAlertOn === null) {
+    lastIsAlertOn = v;
+    return;
+  }
+
+  if (v !== lastIsAlertOn) {
+    console.log("[XMAS] pollIsAlertOn: IsAlertOn mudou", {
+      de: lastIsAlertOn,
+      para: v,
+    });
+
+    if (lastIsAlertOn === true && v === false && isPlayingAlert) {
+      console.log(
+        "[XMAS] onAlertFinished: IsAlertOn true -> false = fim de alerta"
+      );
+      endCurrentAlert("IsAlertOn_false");
+    }
+
+    lastIsAlertOn = v;
+  }
+}
+
+// -------------------- HOOKS DO WIDGET (LOAD / EVENTS) --------------------
 
 window.addEventListener("onWidgetLoad", (event) => {
   const canvas = document.getElementById("rive-canvas");
-  if (!canvas) return;
+  if (!canvas) {
+    console.error("[XMAS] onWidgetLoad: canvas #rive-canvas não encontrado");
+    return;
+  }
 
   const fieldData = (event && event.detail && event.detail.fieldData) || {};
   LAST_FIELDS = fieldData;
   currentFieldData = fieldData;
 
-  // ON/OFF usando helper
-  ENABLE_FOLLOW     = asBool(fieldData.enableFollow, true);
-  ENABLE_SUB        = asBool(fieldData.enableSub, true);
-  ENABLE_SUB_T2     = asBool(fieldData.enableSubT2, true);
-  ENABLE_SUB_T3     = asBool(fieldData.enableSubT3, true);
-  ENABLE_GIFT_SMALL = asBool(fieldData.enableGiftSmall, true);
-  ENABLE_GIFT_BIG   = asBool(fieldData.enableGiftBig, true);
-  ENABLE_DONATION   = asBool(fieldData.enableDonation, true);
-  ENABLE_BITS       = asBool(fieldData.enableBits, true);
-  ENABLE_RAID       = asBool(fieldData.enableRaid, true);
+  console.log("[XMAS] onWidgetLoad: fieldData =", fieldData);
+
+  ENABLE_FOLLOW     = getFieldBool(fieldData, "enableFollow", true);
+  ENABLE_SUB        = getFieldBool(fieldData, "enableSub", true);
+  ENABLE_SUB_T2     = getFieldBool(fieldData, "enableSubT2", true);
+  ENABLE_SUB_T3     = getFieldBool(fieldData, "enableSubT3", true);
+  ENABLE_GIFT_SMALL = getFieldBool(fieldData, "enableGiftSmall", true);
+  ENABLE_GIFT_BIG   = getFieldBool(fieldData, "enableGiftBig", true);
+  ENABLE_DONATION   = getFieldBool(fieldData, "enableDonation", true);
+  ENABLE_BITS       = getFieldBool(fieldData, "enableBits", true);
+  ENABLE_RAID       = getFieldBool(fieldData, "enableRaid", true);
+
+  QUEUE_ENABLED = getFieldBool(fieldData, "enableAlertQueue", true);
+  QUEUE_MAX_SIZE = Number(fieldData.queueMaxSize ?? 20) || 20;
 
   MIN_DONATION = Number(fieldData.minDonation ?? 0) || 0;
   MIN_BITS     = Number(fieldData.minBits ?? 0) || 0;
@@ -483,14 +717,35 @@ window.addEventListener("onWidgetLoad", (event) => {
   GIFT_BIG_THRESHOLD =
     Number(fieldData.giftBigThreshold ?? fieldData.giftThreshold ?? 10) || 10;
 
-  // fila – vamos falar dela abaixo
-  QUEUE_ENABLED = asBool(fieldData.enableAlertQueue, false);
-  QUEUE_MAX_SIZE = Number(fieldData.queueMaxSize ?? 20) || 20;
+  console.log("[XMAS] onWidgetLoad: flags =", {
+    ENABLE_FOLLOW,
+    ENABLE_SUB,
+    ENABLE_SUB_T2,
+    ENABLE_SUB_T3,
+    ENABLE_GIFT_SMALL,
+    ENABLE_GIFT_BIG,
+    ENABLE_DONATION,
+    ENABLE_BITS,
+    ENABLE_RAID,
+    QUEUE_ENABLED,
+    QUEUE_MAX_SIZE,
+    MIN_DONATION,
+    MIN_BITS,
+    MIN_RAID,
+    GIFT_BIG_THRESHOLD,
+  });
 
   alertQueue = [];
   isPlayingAlert = false;
+  if (alertEndTimeoutId) {
+    clearTimeout(alertEndTimeoutId);
+    alertEndTimeoutId = null;
+  }
 
-  if (!window.rive) return;
+  if (!window.rive) {
+    console.error("[XMAS] onWidgetLoad: window.rive não disponível");
+    return;
+  }
 
   riveInstance = new rive.Rive({
     src: RIVE_URL,
@@ -503,21 +758,20 @@ window.addEventListener("onWidgetLoad", (event) => {
     }),
     autoBind: true,
     onLoad: () => {
+      console.log("[XMAS] Rive onLoad chamado");
       riveInstance.resizeDrawingSurfaceToCanvas();
       const vmBundle = bindViewModels(riveInstance);
       if (!vmBundle) return;
+
       applyFieldSettings(vmBundle, fieldData);
+
+      lastIsAlertOn = null;
+      setInterval(pollIsAlertOn, 120);
+
       riveInstance.play();
-    },
-    onEvent: (ev) => {
-      if (ev?.name === "AlertDone") {
-        isPlayingAlert = false;
-        processAlertQueue();
-      }
     },
   });
 });
-
 
 window.addEventListener("resize", () => {
   if (riveInstance) {
@@ -533,9 +787,15 @@ window.addEventListener("onEventReceived", (e) => {
   const ev = payload.event || payload.data || {};
   const fields = LAST_FIELDS || {};
 
-  const eventType = classifyEventType(listener, ev, fields);
-  if (eventType == null) return;
+  console.log("[XMAS] onEventReceived:", { listener, ev });
 
-  enqueueAlert(eventType);
+  const eventType = classifyEventType(listener, ev, fields);
+  if (eventType == null) {
+    return;
+  }
+
+  const label = getEventLabel(eventType);
+
+  enqueueAlert(eventType, label);
   processAlertQueue();
 });
