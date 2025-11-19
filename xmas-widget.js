@@ -5,7 +5,6 @@ let LAST_FIELDS = {};
 let riveInstance = null;
 window.XmasVM = null;
 let currentFieldData = {};
-
 let ENABLE_FOLLOW = true;
 let ENABLE_SUB = true;
 let ENABLE_SUB_T2 = true;
@@ -395,7 +394,7 @@ function classifyEventType(listener, ev, fields) {
 
       if (isBombSummary) {
         const signature = `${listener}|${giftBombKey || ""}|${rawGiftCount || 0}`;
-
+      
         if (
           signature &&
           lastGiftBombSignature === signature &&
@@ -407,27 +406,39 @@ function classifyEventType(listener, ev, fields) {
           );
           return null;
         }
-
+      
         lastGiftBombSignature = signature;
         lastGiftBombTime = now;
-
-        const giftCount = rawGiftCount > 0 ? rawGiftCount : 1;
-
+      
+        let giftCount =
+          rawGiftCount > 0
+            ? rawGiftCount
+            : Number(
+                ev.amount ||        
+                ev.amount_raw ||     
+                ev.totalGifts ||   
+                ev.quantity ||        
+                0
+              ) || 1;                 
+      
+        if (giftCount < 1) giftCount = 1;
+      
         if (giftCount >= bigGiftThreshold) {
           if (!ENABLE_GIFT_BIG) return null;
-          type = 4; // big gift
+          type = 4; // BigGift
         } else {
           if (!ENABLE_GIFT_SMALL) return null;
-          type = 3; // small gift
+          type = 3; // SmallGift
         }
-
+      
         lastGiftBombWindowUntil = now + 8000;
-
+      
         console.log(
           "[XMAS] classifyEventType: MASS GIFT",
           giftCount,
           "-> type",
-          type
+          type,
+          "| threshold =", bigGiftThreshold
         );
         break;
       }
@@ -780,3 +791,4 @@ window.addEventListener("onEventReceived", (e) => {
   enqueueAlert(eventType, label);
   processAlertQueue();
 });
+
