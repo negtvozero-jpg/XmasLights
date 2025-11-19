@@ -5,6 +5,7 @@ let LAST_FIELDS = {};
 let riveInstance = null;
 window.XmasVM = null;
 let currentFieldData = {};
+
 let ENABLE_FOLLOW = true;
 let ENABLE_SUB = true;
 let ENABLE_SUB_T2 = true;
@@ -28,16 +29,17 @@ let lastIsAlertOn = null;
 let lastGiftBombSignature = null;
 let lastGiftBombTime = 0;
 let lastGiftBombWindowUntil = 0;
+
 const EVENT_PRIORITY = {
-  0: 40,
-  1: 50,
-  2: 60,
-  3: 45,
-  4: 80,
-  5: 50,
-  6: 40,
-  7: 100,
-  8: 10,
+  0: 40,  // sub T1 / Prime
+  1: 50,  // sub T2
+  2: 60,  // sub T3
+  3: 45,  // gift pequeno
+  4: 80,  // gift grande
+  5: 50,  // donation
+  6: 40,  // bits
+  7: 100, // raid
+  8: 10,  // follower
 };
 
 function getEventPriority(eventType) {
@@ -231,45 +233,32 @@ function applyFieldSettings(vmBundle, fieldData) {
     "twinkle-alternated": 5,
   };
 
-   if (globalVM.color) {
-    const cPrim = hexToRiveColor(fieldData.primaryColor);
-    const cSec  = hexToRiveColor(fieldData.secondaryColor);
-    const cAcc  = hexToRiveColor(fieldData.accentColor);
-    const cWire = hexToRiveColor(fieldData.wireColor); // nome exato do field no SE
+  if (globalVM.number) {
+    const rawIdleStyle = fieldData.idleStyle;
+    let idx = 0;
 
-    const colorsDebug = {};
-
-    if (cPrim != null) {
-      const p = globalVM.color("ColorPrimary");
-      if (p) p.value = cPrim;
-      colorsDebug.cPrim = cPrim;
-    }
-
-    if (cSec != null) {
-      const p = globalVM.color("ColorSecondary");
-      if (p) p.value = cSec;
-      colorsDebug.cSec = cSec;
-    }
-
-    if (cAcc != null) {
-      const p = globalVM.color("ColorAccent");
-      if (p) p.value = cAcc;
-      colorsDebug.cAcc = cAcc;
-    }
-
-    if (cWire != null) {
-      const p =
-        globalVM.color("ColorWire") ||   
-        globalVM.color("WireColor");    
-      if (p) {
-        p.value = cWire;
-        colorsDebug.cWire = cWire;
+    if (typeof rawIdleStyle === "number") {
+      idx = rawIdleStyle;
+    } else if (typeof rawIdleStyle === "string" && rawIdleStyle.trim() !== "") {
+      const asNum = Number(rawIdleStyle);
+      if (!Number.isNaN(asNum)) {
+        idx = asNum;
       } else {
-        console.warn("[XMAS] applyFieldSettings: ColorWire/WireColor não encontrado no GlobalVM");
+        idx = idleStyleMap[rawIdleStyle] ?? 0;
       }
     }
 
-    console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
+    const prop = globalVM.number("IdleStyle");
+    if (prop) prop.value = idx;
+    console.log("[XMAS] applyFieldSettings: IdleStyle idx =", idx);
+  }
+
+  if (globalVM.number && fieldData.idleSpeed) {
+    const speedMap = { slow: 0, normal: 1, fast: 2 };
+    const sIdx = speedMap[fieldData.idleSpeed] ?? 1;
+    const prop = globalVM.number("IdleSpeed");
+    if (prop) prop.value = sIdx;
+    console.log("[XMAS] applyFieldSettings: IdleSpeed =", sIdx);
   }
 
   if (globalVM.number && typeof fieldData.bulbBrightness === "number") {
@@ -290,7 +279,7 @@ function applyFieldSettings(vmBundle, fieldData) {
     const cPrim = hexToRiveColor(fieldData.primaryColor);
     const cSec = hexToRiveColor(fieldData.secondaryColor);
     const cAcc = hexToRiveColor(fieldData.accentColor);
-    const cWire = hexToRiveColor(fieldData.wireColor || fieldData.colorWire);
+    const cWire = hexToRiveColor(fieldData.wireColor);
 
     const colorsDebug = {};
     if (cPrim != null) {
@@ -308,13 +297,19 @@ function applyFieldSettings(vmBundle, fieldData) {
       if (p) p.value = cAcc;
       colorsDebug.cAcc = cAcc;
     }
+   if (cWire != null) {
+      const p =
+        globalVM.color("ColorWire") ||   
+        globalVM.color("WireColor");   
+      if (p) {
+        p.value = cWire;
+        colorsDebug.cWire = cWire;
+      } else {
+        console.warn("[XMAS] applyFieldSettings: ColorWire/WireColor não encontrado no GlobalVM");
+      }
+    }
     console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
   }
-    if (cWire != null) {                      
-        const p = globalVM.color("ColorWire");  
-        if (p) p.value = cWire;
-        colorsDebug.cWire = cWire;
-      }
 
   applyBulbStyles(vmBundle, fieldData);
 }
@@ -420,10 +415,10 @@ function classifyEventType(listener, ev, fields) {
 
         if (giftCount >= bigGiftThreshold) {
           if (!ENABLE_GIFT_BIG) return null;
-          type = 4;
+          type = 4; // big gift
         } else {
           if (!ENABLE_GIFT_SMALL) return null;
-          type = 3; 
+          type = 3; // small gift
         }
 
         lastGiftBombWindowUntil = now + 8000;
@@ -439,13 +434,13 @@ function classifyEventType(listener, ev, fields) {
 
       if (tier.includes("2000") || tier === "tier2") {
         if (!ENABLE_SUB_T2) return null;
-        type = 1;
+        type = 1; // T2
       } else if (tier.includes("3000") || tier === "tier3") {
         if (!ENABLE_SUB_T3) return null;
-        type = 2;
+        type = 2; // T3
       } else {
         if (!ENABLE_SUB) return null;
-        type = 0;
+        type = 0; // T1 / Prime
       }
 
       console.log(
@@ -639,6 +634,7 @@ function processAlertQueue() {
     endCurrentAlert("fallback_timeout");
   }, ALERT_FALLBACK_MS);
 }
+
 
 function pollIsAlertOn() {
   const bundle = window.XmasVM;
