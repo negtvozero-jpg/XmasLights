@@ -277,6 +277,7 @@ function applyFieldSettings(vmBundle, fieldData) {
     const cPrim = hexToRiveColor(fieldData.primaryColor);
     const cSec = hexToRiveColor(fieldData.secondaryColor);
     const cAcc = hexToRiveColor(fieldData.accentColor);
+    const cWire = hexToRiveColor(fieldData.wireColor || fieldData.colorWire);
 
     const colorsDebug = {};
     if (cPrim != null) {
@@ -296,6 +297,11 @@ function applyFieldSettings(vmBundle, fieldData) {
     }
     console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
   }
+  if (cWire != null) {                      
+      const p = globalVM.color("ColorWire");  
+      if (p) p.value = cWire;
+      colorsDebug.cWire = cWire;
+    }
 
   applyBulbStyles(vmBundle, fieldData);
 }
