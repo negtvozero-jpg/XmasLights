@@ -315,8 +315,8 @@ function applyFieldSettings(vmBundle, fieldData) {
 
 function resolveGiftCount(ev, defaultCount = 1) {
   const candidates = [
-    ev.giftCount,
-    ev.bulkGifted,
+    ev.giftCount,   
+    ev.amount,     
     ev.count,
     ev.quantity,
     ev.giftCountAlt,
@@ -344,113 +344,121 @@ function resolveGiftCount(ev, defaultCount = 1) {
 
 function classifyEventType(listener, ev, fields) {
   const now = Date.now();
-
-  // Controls from SE fields
-  const ENABLE_GIFT_SMALL  = fields.enableGiftSmall !== false;
-  const ENABLE_GIFT_BIG    = fields.enableGiftBig   !== false;
-  const ENABLE_SUBT1       = fields.enableSubT1     !== false;
-  const ENABLE_SUBT2       = fields.enableSubT2     !== false;
-  const ENABLE_SUBT3       = fields.enableSubT3     !== false;
-  const ENABLE_DONATION    = fields.enableDonation  !== false;
-  const ENABLE_BITS        = fields.enableBits      !== false;
-  const ENABLE_RAID        = fields.enableRaid      !== false;
-  const ENABLE_FOLLOWER    = fields.enableFollower  !== false;
-
-  // Thresholds
-  const bigGiftThreshold =
-    Number(fields.giftBigThreshold) ||
-    Number(fields.giftThreshold) ||
-    10;
-
   let type = null;
 
-  if (listener === "raid-latest" && ENABLE_RAID) {
-    type = 7;
+  // Usa os flags globais já calculados no onWidgetLoad
+  const enableFollow     = ENABLE_FOLLOW;
+  const enableSub        = ENABLE_SUB;
+  const enableSubT2      = ENABLE_SUB_T2;
+  const enableSubT3      = ENABLE_SUB_T3;
+  const enableGiftSmall  = ENABLE_GIFT_SMALL;
+  const enableGiftBig    = ENABLE_GIFT_BIG;
+  const enableDonation   = ENABLE_DONATION;
+  const enableBits       = ENABLE_BITS;
+  const enableRaid       = ENABLE_RAID;
+
+  const bigGiftThreshold = GIFT_BIG_THRESHOLD || 10;
+
+  // ---------------- RAID ----------------
+  if (listener === "raid-latest" && enableRaid) {
     console.log("[XMAS] classifyEventType ▶ RAID");
-    return type;
+    return 7;
   }
 
-  if (listener === "follower-latest" && ENABLE_FOLLOWER) {
-    type = 8;
+  // -------------- FOLLOW ---------------
+  if (listener === "follower-latest" && enableFollow) {
     console.log("[XMAS] classifyEventType ▶ FOLLOW");
-    return type;
+    return 8;
   }
 
-  if (listener === "tip-latest" && ENABLE_DONATION) {
-    type = 5;
+  // ------------- DONATION --------------
+  if (listener === "tip-latest" && enableDonation) {
     console.log("[XMAS] classifyEventType ▶ DONATION");
-    return type;
+    return 5;
   }
 
-  if (listener === "cheer-latest" && ENABLE_BITS) {
-    type = 6;
+  // ---------------- BITS ----------------
+  if (listener === "cheer-latest" && enableBits) {
     console.log("[XMAS] classifyEventType ▶ BITS");
-    return type;
+    return 6;
   }
 
-  const giftBombListeners = [
-    "communityGift",        
-    "community-gift-latest",
-    "mass-gift-latest",
-    "giftbomb-latest"
-  ];
+  // ========= MASS GIFT via subscriber-latest =========
+  if (listener === "subscriber-latest") {
+    const rawGiftCount = resolveGiftCount(ev, 0);
 
-  if (giftBombListeners.includes(listener)) {
-    const raw = Number(
-      ev.giftCount ||
-      ev.amount ||
-      ev.amount_raw ||
-      ev.totalGifts ||
-      ev.quantity ||
-      0
-    );
+    const isBomb =
+      !!ev.bulkGifted ||        // flag clássico do SE
+      !!ev.isCommunityGift ||
+      rawGiftCount > 1;
 
-    const giftCount = raw > 0 ? raw : 1;
+    console.log("[XMAS] debug SUBSCRIBER-LATEST:", {
+      tier: ev.tier,
+      bulkGifted: ev.bulkGifted,
+      amount: ev.amount,
+      rawGiftCount,
+      bigGiftThreshold
+    });
 
-    console.log("[XMAS] classifyEventType ▶ MASS GIFT DETECTED:", giftCount);
+    // ------ CASO GIFT BOMB ------
+    if (isBomb) {
+      let giftCount = rawGiftCount > 0 ? rawGiftCount : 1;
 
-    const signature = `${listener}|${giftCount}|${ev.username || ""}`;
-    if (signature === window._lastGiftSig && now - window._lastGiftSigTime < 2000) {
-      console.log("[XMAS] duplicate MASS GIFT ignored");
+      console.log("[XMAS] MASS GIFT detectado:", giftCount);
+
+      if (giftCount >= bigGiftThreshold) {
+        if (!enableGiftBig) return null;
+        type = 4; // BigGift
+        console.log(
+          "[XMAS] MASS GIFT ▶ BIG",
+          giftCount,
+          "(threshold:",
+          bigGiftThreshold,
+          ")"
+        );
+      } else {
+        if (!enableGiftSmall) return null;
+        type = 3; // SmallGift
+        console.log(
+          "[XMAS] MASS GIFT ▶ SMALL",
+          giftCount,
+          "(threshold:",
+          bigGiftThreshold,
+          ")"
+        );
+      }
+
+      return type;
+    }
+
+    // ------ CASO SUB NORMAL (não é bomb) ------
+    if (!enableSub) {
+      console.log("[XMAS] classifyEventType ▶ SUB ignorado (enableSub=false)");
       return null;
     }
-    window._lastGiftSig = signature;
-    window._lastGiftSigTime = now;
 
-    if (giftCount >= bigGiftThreshold) {
-      if (!ENABLE_GIFT_BIG) return null;
-      type = 4; // BigGift
-      console.log("[XMAS] MASS GIFT ▶ BIG", giftCount, "(threshold:", bigGiftThreshold, ")");
-    } else {
-      if (!ENABLE_GIFT_SMALL) return null;
-      type = 3; // SmallGift
-      console.log("[XMAS] MASS GIFT ▶ SMALL", giftCount, "(threshold:", bigGiftThreshold, ")");
-    }
-
-    return type;
-  }
-
-  if (listener === "subscriber-latest") {
-    if (ev.tier === "1000" && ENABLE_SUBT1) {
-      type = 0;
+    if (ev.tier === "1000" && ENABLE_SUB_T1) {
       console.log("[XMAS] classifyEventType ▶ SUB T1");
-      return type;
+      return 0;
     }
-    if (ev.tier === "2000" && ENABLE_SUBT2) {
-      type = 1;
+    if (ev.tier === "2000" && ENABLE_SUB_T2) {
       console.log("[XMAS] classifyEventType ▶ SUB T2");
-      return type;
+      return 1;
     }
-    if (ev.tier === "3000" && ENABLE_SUBT3) {
-      type = 2;
+    if (ev.tier === "3000" && ENABLE_SUB_T3) {
       console.log("[XMAS] classifyEventType ▶ SUB T3");
-      return type;
+      return 2;
     }
+
+    console.log("[XMAS] classifyEventType ▶ SUB ignorado (tier sem match)", ev.tier);
+    return null;
   }
 
+  // --------- OUTROS LISTENERS (não usados) ----------
   console.log("[XMAS] classifyEventType ▶ IGNORADO | listener:", listener, ev);
   return null;
 }
+
 
 
 function fireRiveAlert(vmBundle, eventType, label) {
@@ -736,5 +744,6 @@ window.addEventListener("onEventReceived", (e) => {
   enqueueAlert(eventType, label);
   processAlertQueue();
 });
+
 
 
