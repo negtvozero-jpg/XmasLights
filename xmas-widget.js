@@ -231,32 +231,45 @@ function applyFieldSettings(vmBundle, fieldData) {
     "twinkle-alternated": 5,
   };
 
-  if (globalVM.number) {
-    const rawIdleStyle = fieldData.idleStyle;
-    let idx = 0;
+   if (globalVM.color) {
+    const cPrim = hexToRiveColor(fieldData.primaryColor);
+    const cSec  = hexToRiveColor(fieldData.secondaryColor);
+    const cAcc  = hexToRiveColor(fieldData.accentColor);
+    const cWire = hexToRiveColor(fieldData.wireColor); // nome exato do field no SE
 
-    if (typeof rawIdleStyle === "number") {
-      idx = rawIdleStyle;
-    } else if (typeof rawIdleStyle === "string" && rawIdleStyle.trim() !== "") {
-      const asNum = Number(rawIdleStyle);
-      if (!Number.isNaN(asNum)) {
-        idx = asNum;
+    const colorsDebug = {};
+
+    if (cPrim != null) {
+      const p = globalVM.color("ColorPrimary");
+      if (p) p.value = cPrim;
+      colorsDebug.cPrim = cPrim;
+    }
+
+    if (cSec != null) {
+      const p = globalVM.color("ColorSecondary");
+      if (p) p.value = cSec;
+      colorsDebug.cSec = cSec;
+    }
+
+    if (cAcc != null) {
+      const p = globalVM.color("ColorAccent");
+      if (p) p.value = cAcc;
+      colorsDebug.cAcc = cAcc;
+    }
+
+    if (cWire != null) {
+      const p =
+        globalVM.color("ColorWire") ||   
+        globalVM.color("WireColor");    
+      if (p) {
+        p.value = cWire;
+        colorsDebug.cWire = cWire;
       } else {
-        idx = idleStyleMap[rawIdleStyle] ?? 0;
+        console.warn("[XMAS] applyFieldSettings: ColorWire/WireColor não encontrado no GlobalVM");
       }
     }
 
-    const prop = globalVM.number("IdleStyle");
-    if (prop) prop.value = idx;
-    console.log("[XMAS] applyFieldSettings: IdleStyle idx =", idx);
-  }
-
-  if (globalVM.number && fieldData.idleSpeed) {
-    const speedMap = { slow: 0, normal: 1, fast: 2 };
-    const sIdx = speedMap[fieldData.idleSpeed] ?? 1;
-    const prop = globalVM.number("IdleSpeed");
-    if (prop) prop.value = sIdx;
-    console.log("[XMAS] applyFieldSettings: IdleSpeed =", sIdx);
+    console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
   }
 
   if (globalVM.number && typeof fieldData.bulbBrightness === "number") {
@@ -297,11 +310,11 @@ function applyFieldSettings(vmBundle, fieldData) {
     }
     console.log("[XMAS] applyFieldSettings: colors =", colorsDebug);
   }
-  if (cWire != null) {                      
-      const p = globalVM.color("ColorWire");  
-      if (p) p.value = cWire;
-      colorsDebug.cWire = cWire;
-    }
+    if (cWire != null) {                      
+        const p = globalVM.color("ColorWire");  
+        if (p) p.value = cWire;
+        colorsDebug.cWire = cWire;
+      }
 
   applyBulbStyles(vmBundle, fieldData);
 }
