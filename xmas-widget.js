@@ -346,7 +346,6 @@ function classifyEventType(listener, ev, fields) {
   const now = Date.now();
   let type = null;
 
-  // Usa os flags globais já calculados no onWidgetLoad
   const enableFollow     = ENABLE_FOLLOW;
   const enableSub        = ENABLE_SUB;
   const enableSubT2      = ENABLE_SUB_T2;
@@ -388,7 +387,7 @@ function classifyEventType(listener, ev, fields) {
     const rawGiftCount = resolveGiftCount(ev, 0);
 
     const isBomb =
-      !!ev.bulkGifted ||        // flag clássico do SE
+      !!ev.bulkGifted ||        
       !!ev.isCommunityGift ||
       rawGiftCount > 1;
 
@@ -400,7 +399,6 @@ function classifyEventType(listener, ev, fields) {
       bigGiftThreshold
     });
 
-    // ------ CASO GIFT BOMB ------
     if (isBomb) {
       let giftCount = rawGiftCount > 0 ? rawGiftCount : 1;
 
@@ -431,7 +429,6 @@ function classifyEventType(listener, ev, fields) {
       return type;
     }
 
-    // ------ CASO SUB NORMAL (não é bomb) ------
     if (!enableSub) {
       console.log("[XMAS] classifyEventType ▶ SUB ignorado (enableSub=false)");
       return null;
@@ -454,7 +451,6 @@ function classifyEventType(listener, ev, fields) {
     return null;
   }
 
-  // --------- OUTROS LISTENERS (não usados) ----------
   console.log("[XMAS] classifyEventType ▶ IGNORADO | listener:", listener, ev);
   return null;
 }
@@ -744,6 +740,7 @@ window.addEventListener("onEventReceived", (e) => {
   enqueueAlert(eventType, label);
   processAlertQueue();
 });
+
 
 
 
