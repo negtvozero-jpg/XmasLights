@@ -15,4 +15,4 @@ jobs:
       - name: Purge jsDelivr cache for xmas-widget.js
         run: |
           echo "Purging jsDelivr cache..."
-          curl -X GET "https://purge.jsdelivr.net/gh/negtvozero-jpg/XmasLights@main/xmas-widget.js"
+          curl -X GET "https://purge.jsdelivr.net/gh/negtvozero-jpg/XmasLights/xmas-widget.js"
