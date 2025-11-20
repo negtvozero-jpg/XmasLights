@@ -376,6 +376,11 @@ function classifyEventType(listener, ev, fields) {
     return 5;
   }
 
+  if (listener === "charityCampaignDonation-latest" && ENABLE_DONATION) {
+    console.log("[XMAS] classifyEventType ▶ CHARITY DONATION (as DONATION)");
+    return 5;
+  }
+
   // ---------------- BITS ----------------
   if (listener === "cheer-latest" && enableBits) {
     console.log("[XMAS] classifyEventType ▶ BITS");
@@ -432,6 +437,17 @@ function classifyEventType(listener, ev, fields) {
     if (!enableSub) {
       console.log("[XMAS] classifyEventType ▶ SUB ignorado (enableSub=false)");
       return null;
+    }
+
+    const isPrime =
+    ev.isPrime === true ||
+    ev.prime === true ||
+    (typeof ev.plan === "string" && ev.plan.toLowerCase().includes("prime")) ||
+    (typeof ev.sub_plan === "string" && ev.sub_plan.toLowerCase().includes("prime"));
+
+    if (isPrime && ENABLE_SUBT3) {
+      console.log("[XMAS] classifyEventType ▶ SUB PRIME (as T3)");
+      return 2;
     }
 
     if (ev.tier === "1000" && ENABLE_SUB_T1) {
