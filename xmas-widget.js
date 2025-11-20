@@ -253,7 +253,7 @@ function applyFieldSettings(vmBundle, fieldData) {
   }
 
   if (globalVM.number && fieldData.idleSpeed) {
-    const speedMap = { slow: 0, normal: 1, fast: 2 };
+    const speedMap = { slow: 0, normal: 1, fast: 2, extraslow: 3 };
     const sIdx = speedMap[fieldData.idleSpeed] ?? 1;
     const prop = globalVM.number("IdleSpeed");
     if (prop) prop.value = sIdx;
@@ -740,7 +740,3 @@ window.addEventListener("onEventReceived", (e) => {
   enqueueAlert(eventType, label);
   processAlertQueue();
 });
-
-
-
-
