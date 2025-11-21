@@ -373,13 +373,14 @@ function classifyEventType(listener, ev, fields) {
   const enableDonation   = ENABLE_DONATION;
   const enableBits       = ENABLE_BITS;
   const enableRaid       = ENABLE_RAID;
-
+  
   const bigGiftThreshold = GIFT_BIG_THRESHOLD || 10;
 
   const lowerListener = String(listener || "").toLowerCase();
-  const evTypeLower   = String(ev.type || "").toLowerCase();
+  const rawType =
+    (ev && (ev.type || (ev.data && ev.data.type))) || "";
+  const evTypeLower = String(rawType).toLowerCase();
   const activityGroup = ev.activityGroup || ev.channel || "";
-
   const normListener = lowerListener;
 
   if (normListener === "raid-latest" && enableRaid) {
