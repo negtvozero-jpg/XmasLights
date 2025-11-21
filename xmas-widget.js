@@ -28,15 +28,16 @@ let lastIsAlertOn = null;
 let lastGiftBombSignature = null;
 let lastGiftBombTime = 0;
 let lastGiftBombWindowUntil = 0;
+let lastGiftActivityGroup = null;
 
 const EVENT_PRIORITY = {
-  0: 40,  // sub T1 / Prime
-  1: 50,  // sub T2
-  2: 60,  // sub T3
-  3: 45,  // gift pequeno
-  4: 80,  // gift grande
-  5: 50,  // donation
-  6: 40,  // bits
+  0: 30,  // sub T1 / Prime
+  1: 40,  // sub T2
+  2: 50,  // sub T3
+  3: 60,  // small gift
+  4: 80,  // big gift
+  5: 55,  // donation
+  6: 45,  // bits
   7: 100, // raid
   8: 10,  // follower
 };
@@ -296,10 +297,10 @@ function applyFieldSettings(vmBundle, fieldData) {
       if (p) p.value = cAcc;
       colorsDebug.cAcc = cAcc;
     }
-   if (cWire != null) {
+    if (cWire != null) {
       const p =
-        globalVM.color("ColorWire") ||   
-        globalVM.color("WireColor");   
+        globalVM.color("ColorWire") ||
+        globalVM.color("WireColor");
       if (p) {
         p.value = cWire;
         colorsDebug.cWire = cWire;
@@ -314,29 +315,47 @@ function applyFieldSettings(vmBundle, fieldData) {
 }
 
 function resolveGiftCount(ev, defaultCount = 1) {
-  const candidates = [
-    ev.giftCount,   
-    ev.amount,     
-    ev.count,
-    ev.quantity,
-    ev.giftCountAlt,
-  ];
+  function scan(obj) {
+    if (!obj || typeof obj !== "object") return null;
 
-  for (const val of candidates) {
-    if (val === undefined || val === null) continue;
+    const candidates = [
+      obj.amount,
+      obj.amount_raw,
+      obj.total,
+      obj.giftCount,
+      obj.count,
+      obj.quantity,
+      obj.giftCountAlt,
+    ];
 
-    if (typeof val === "number") {
-      if (!Number.isNaN(val) && val > 0) return val;
-      continue;
-    }
+    for (const val of candidates) {
+      if (val === undefined || val === null) continue;
 
-    if (typeof val === "string") {
-      const m = val.match(/^\d+$/);
-      if (m) {
-        const n = parseInt(val, 10);
-        if (n > 0) return n;
+      if (typeof val === "number") {
+        if (!Number.isNaN(val) && val > 0) return val;
+        continue;
+      }
+
+      if (typeof val === "string") {
+        const m = val.match(/^\d+$/);
+        if (m) {
+          const n = parseInt(val, 10);
+          if (n > 0) return n;
+        }
       }
     }
+
+    return null;
+  }
+
+  // 1) Try top-level event object
+  let n = scan(ev);
+  if (n && n > 0) return n;
+
+  // 2) Try nested "data" (used by Emulate / mock events)
+  if (ev && typeof ev.data === "object") {
+    n = scan(ev.data);
+    if (n && n > 0) return n;
   }
 
   return defaultCount;
@@ -344,7 +363,6 @@ function resolveGiftCount(ev, defaultCount = 1) {
 
 function classifyEventType(listener, ev, fields) {
   const now = Date.now();
-  let type = null;
 
   const enableFollow     = ENABLE_FOLLOW;
   const enableSub        = ENABLE_SUB;
@@ -358,129 +376,153 @@ function classifyEventType(listener, ev, fields) {
 
   const bigGiftThreshold = GIFT_BIG_THRESHOLD || 10;
 
-  // ---------------- RAID ----------------
-  if (listener === "raid-latest" && enableRaid) {
+  const lowerListener = String(listener || "").toLowerCase();
+  const evTypeLower   = String(ev.type || "").toLowerCase();
+  const activityGroup = ev.activityGroup || ev.channel || "";
+
+  const normListener = lowerListener;
+
+  if (normListener === "raid-latest" && enableRaid) {
     console.log("[XMAS] classifyEventType ▶ RAID");
     return 7;
   }
 
-  // -------------- FOLLOW ---------------
-  if (listener === "follower-latest" && enableFollow) {
-    console.log("[XMAS] classifyEventType ▶ FOLLOW");
+  if (normListener === "follower-latest" && enableFollow) {
+    console.log("[XMAS] classifyEventType ▶ FOLLOWER");
     return 8;
   }
 
-  // ------------- DONATION --------------
-  if (listener === "tip-latest" && enableDonation) {
-    console.log("[XMAS] classifyEventType ▶ DONATION");
-    return 5;
+  {
+    const isNormalTip =
+      normListener === "tip-latest" ||
+      normListener === "donation-latest";
+
+    const isCharity = evTypeLower.includes("charity");
+
+    if (enableDonation && (isNormalTip || isCharity)) {
+      const amount = Number(ev.amount || ev.amount_raw || 0);
+      console.log("[XMAS] classifyEventType ▶ DONATION/CHARITY", {
+        listener,
+        evType: ev.type,
+        amount,
+      });
+      return 5;
+    }
   }
 
-  if (
-    (
-      listener === "charityCampaignDonation-latest" ||
-      listener === "charity-donation-latest" ||
-      listener === "charityCampaignDonationLatest"
-    )
-    && ENABLE_DONATION
-  ) {
-    console.log("[XMAS] classifyEventType ▶ CHARITY DONATION");
-    return 5;
-  }
-
-  // ---------------- BITS ----------------
-  if (listener === "cheer-latest" && enableBits) {
+  if (normListener === "cheer-latest" && enableBits) {
     console.log("[XMAS] classifyEventType ▶ BITS");
     return 6;
   }
 
-  // ========= MASS GIFT via subscriber-latest =========
-  if (listener === "subscriber-latest") {
-    const rawGiftCount = resolveGiftCount(ev, 0);
-
-    const isBomb =
-      !!ev.bulkGifted ||        
-      !!ev.isCommunityGift ||
-      rawGiftCount > 1;
-
-    console.log("[XMAS] debug SUBSCRIBER-LATEST:", {
-      tier: ev.tier,
-      bulkGifted: ev.bulkGifted,
-      amount: ev.amount,
-      rawGiftCount,
-      bigGiftThreshold
-    });
-
-    if (isBomb) {
-      let giftCount = rawGiftCount > 0 ? rawGiftCount : 1;
-
-      console.log("[XMAS] MASS GIFT detectado:", giftCount);
-
-      if (giftCount >= bigGiftThreshold) {
-        if (!enableGiftBig) return null;
-        type = 4; // BigGift
-        console.log(
-          "[XMAS] MASS GIFT ▶ BIG",
-          giftCount,
-          "(threshold:",
-          bigGiftThreshold,
-          ")"
-        );
-      } else {
-        if (!enableGiftSmall) return null;
-        type = 3; // SmallGift
-        console.log(
-          "[XMAS] MASS GIFT ▶ SMALL",
-          giftCount,
-          "(threshold:",
-          bigGiftThreshold,
-          ")"
-        );
-      }
-
-      return type;
+  if (lowerListener === "event" && evTypeLower.includes("communitygift")) {
+    if (!enableSub) {
+      console.log("[XMAS] communityGiftPurchase ignorado (enableSub=false)");
+      return null;
     }
 
+    console.log("[XMAS] communityGiftPurchase RAW ev:", ev);
+
+    const giftCount = resolveGiftCount(ev, Number(ev.amount || 0)) || 1;
+
+    console.log("[XMAS] communityGiftPurchase detectado:", {
+      giftCount,
+      activityGroup,
+    });
+
+    lastGiftActivityGroup   = activityGroup || null;
+    lastGiftBombTime        = now;
+    lastGiftBombWindowUntil = now + 4000;
+
+    if (giftCount >= bigGiftThreshold) {
+      if (!enableGiftBig) return null;
+      console.log("[XMAS] communityGiftPurchase ▶ BIG GIFT", {
+        giftCount,
+        bigGiftThreshold,
+      });
+      return 4;
+    } else {
+      if (!enableGiftSmall) return null;
+      console.log("[XMAS] communityGiftPurchase ▶ SMALL GIFT", {
+        giftCount,
+        bigGiftThreshold,
+      });
+      return 3;
+    }
+  }
+
+  if (normListener === "subscriber-latest") {
     if (!enableSub) {
       console.log("[XMAS] classifyEventType ▶ SUB ignorado (enableSub=false)");
       return null;
     }
 
-  const rawTier = String(ev.tier || "").toLowerCase();
-  const rawPlan = String(ev.plan || ev.sub_plan || "").toLowerCase();
-  const isPrime =
-  ev.isPrime === true ||
-  rawTier.includes("prime") ||
-  rawPlan.includes("prime");
+    const inGiftWindow =
+      lastGiftActivityGroup &&
+      activityGroup &&
+      activityGroup === lastGiftActivityGroup &&
+      now < lastGiftBombWindowUntil;
 
+    const isBulkFlag =
+      asBool(ev.bulkGifted, false) ||
+      asBool(ev.isCommunityGift, false) ||
+      asBool(ev.isGiftSub, false);
 
-    if (isPrime && ENABLE_SUBT3) {
-      console.log("[XMAS] classifyEventType ▶ SUB PRIME (as T3)");
-      return 2;
+    const isGiftChild = inGiftWindow || isBulkFlag;
+
+    if (isGiftChild) {
+      console.log("[XMAS] classifyEventType ▶ SUB de gift bomb suprimido", {
+        activityGroup,
+        lastGiftActivityGroup,
+        now,
+        lastGiftBombWindowUntil,
+        bulkGifted: ev.bulkGifted,
+        isCommunityGift: ev.isCommunityGift,
+        isGiftSub: ev.isGiftSub,
+      });
+      return null;
     }
 
-    if (ev.tier === "1000" && ENABLE_SUB_T1) {
+    console.log("[XMAS] debug SUBSCRIBER-LATEST (normal sub):", {
+      tier: ev.tier,
+      bulkGifted: ev.bulkGifted,
+      isCommunityGift: ev.isCommunityGift,
+      amount: ev.amount,
+      rawGiftCount: resolveGiftCount(ev, 0),
+      bigGiftThreshold,
+    });
+
+    const isPrime =
+      String(ev.tier || "").toLowerCase() === "prime" ||
+      String(ev.plan || "").toLowerCase().includes("prime");
+
+    if (isPrime) {
+      console.log("[XMAS] classifyEventType ▶ PRIME -> type 0");
+      return 0;
+    }
+    if (ev.tier === "1000") {
       console.log("[XMAS] classifyEventType ▶ SUB T1");
       return 0;
     }
-    if (ev.tier === "2000" && ENABLE_SUB_T2) {
+    if (ev.tier === "2000" && enableSubT2) {
       console.log("[XMAS] classifyEventType ▶ SUB T2");
       return 1;
     }
-    if (ev.tier === "3000" && ENABLE_SUB_T3) {
+    if (ev.tier === "3000" && enableSubT3) {
       console.log("[XMAS] classifyEventType ▶ SUB T3");
       return 2;
     }
 
-    console.log("[XMAS] classifyEventType ▶ SUB ignorado (tier sem match)", ev.tier);
-    return null;
+    console.log(
+      "[XMAS] classifyEventType ▶ SUB fallback type 0 (tier sem match)",
+      ev.tier
+    );
+    return 0;
   }
 
   console.log("[XMAS] classifyEventType ▶ IGNORADO | listener:", listener, ev);
   return null;
 }
-
-
 
 function fireRiveAlert(vmBundle, eventType, label) {
   if (!eventType && eventType !== 0) return;
@@ -619,7 +661,6 @@ function processAlertQueue() {
     endCurrentAlert("fallback_timeout");
   }, ALERT_FALLBACK_MS);
 }
-
 
 function pollIsAlertOn() {
   const bundle = window.XmasVM;
