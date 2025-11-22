@@ -1,5 +1,5 @@
 const RIVE_URL =
-  "https://raw.githubusercontent.com/negtvozero-jpg/XmasLights/main/XmasLightsOverlay.riv";
+  "https://cdn.jsdelivr.net/gh/negtvozero-jpg/XmasLights@main/XmasLightsOverlay.riv";
 
 let LAST_FIELDS = {};
 let riveInstance = null;
@@ -807,3 +807,4 @@ window.addEventListener("onEventReceived", (e) => {
   enqueueAlert(eventType, label);
   processAlertQueue();
 });
+
